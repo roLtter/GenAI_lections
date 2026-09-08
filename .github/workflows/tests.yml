@@ -25,4 +25,5 @@ jobs:
           pip install pytest requests
 
       - name: Run tests
-        run: pytest test_agent.py -m "not integration"
+        working-directory: 3_1_LLM_agent
+        run: pytest tests/test_agent.py -m "not integration"
