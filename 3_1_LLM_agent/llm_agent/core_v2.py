@@ -9,6 +9,8 @@ from .tool_calculator import CalculatorTool
 from .tool_websearch import WebSearchTool
 from .tool_pdfinfo import PDFInfoTool
 
+from .tool_currency_converter import CurrencyConverterTool
+
 class LLMAgent:
     """
     LLM-агент, который планирует и выполняет задачи с помощью инструментов.
@@ -44,6 +46,7 @@ class LLMAgent:
             "calculator": CalculatorTool(),
             "web_search": WebSearchTool(),
             "pdf_info": PDFInfoTool(),
+            "currency_converter": CurrencyConverterTool(),
         }
         self.conversation_history = []
     
@@ -89,7 +92,10 @@ class LLMAgent:
         - **calculator**: For any math-related questions (numbers, calculations). Use it with the full expression.
         - **web_search**: For finding any information about the real world (current events, facts, definitions). Use it with the user's question or a clear search query. USE ONLY RUSSIAN LANGUAGE QUERIES in this tool.
         - **pdf_info**: For extracting information from PDF files (metadata, page count, text content). Use it with a local file path or a URL to a PDF file.
-        Your response MUST be ONLY a JSON object of the following format.
+        - **currency_converter**: For converting one currency to another using current exchange rates.
+          Use it ONLY for currency conversion requests.
+          The input MUST have the format: "amount FROM_CURRENCY TO_CURRENCY".
+          Example: "100 USD EUR", "5000 RUB USD", "50 EUR JPY".
         If one or more tools are needed to answer, return JSON of this structure:
         {{
         "plan": [
