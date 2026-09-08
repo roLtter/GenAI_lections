@@ -2,7 +2,6 @@ import pytest
 from unittest.mock import Mock, patch
 
 from llm_agent.tool_currency_converter import CurrencyConverterTool
-from llm_agent.core_v2 import LLMAgent
 
 
 # =====================================================================
@@ -12,17 +11,31 @@ from llm_agent.core_v2 import LLMAgent
 def test_same_currency():
     tool = CurrencyConverterTool()
 
-    result = tool.use("100 USD USD")
+    mock_response = Mock()
+    mock_response.json.return_value = {
+        "result": "success",
+        "rates": {
+            "USD": 1.0
+        }
+    }
+    mock_response.raise_for_status.return_value = None
 
-    assert "100.00 USD = 100.00 USD" in result
+    with patch(
+        "llm_agent.tool_currency_converter.requests.get",
+        return_value=mock_response
+    ):
+        result = tool.use(100, "USD", "USD")
+
+    assert "100 USD = 100.00 USD" in result
 
 
-def test_invalid_input():
+def test_invalid_amount():
     tool = CurrencyConverterTool()
 
-    result = tool.use("100 USD")
+    result = tool.use(-100, "USD", "EUR")
 
     assert "Ошибка" in result
+    assert "Сумма не может быть отрицательной" in result
 
 
 def test_currency_conversion():
@@ -41,9 +54,9 @@ def test_currency_conversion():
         "llm_agent.tool_currency_converter.requests.get",
         return_value=mock_response
     ):
-        result = tool.use("100 USD EUR")
+        result = tool.use(100, "USD", "EUR")
 
-    assert "85.00 EUR" in result
+    assert "100 USD = 85.00 EUR" in result
 
 
 def test_cache():
@@ -63,11 +76,14 @@ def test_cache():
         return_value=mock_response
     ) as mock_get:
 
-        tool.use("100 USD EUR")
-        tool.use("200 USD EUR")
+        result1 = tool.use(100, "USD", "EUR")
+        result2 = tool.use(200, "USD", "EUR")
 
-        # API должен быть вызван только один раз,
-        # потому что второй запрос берёт данные из кеша
+        assert "85.00 EUR" in result1
+        assert "170.00 EUR" in result2
+
+        # API вызван только один раз,
+        # второй запрос использует кеш
         mock_get.assert_called_once()
 
 
@@ -77,6 +93,8 @@ def test_cache():
 
 @pytest.mark.integration
 def test_currency_conversion_live():
+    from llm_agent.core_v2 import LLMAgent
+
     agent = LLMAgent(
         local=True,
         ollama_model="deepseek-r1:14b"
@@ -91,6 +109,8 @@ def test_currency_conversion_live():
 
 @pytest.mark.integration
 def test_rub_to_usd_conversion_live():
+    from llm_agent.core_v2 import LLMAgent
+
     agent = LLMAgent(
         local=True,
         ollama_model="deepseek-r1:14b"
