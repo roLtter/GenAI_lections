@@ -26,4 +26,6 @@ jobs:
 
       - name: Run tests
         working-directory: 3_1_LLM_agent
+        env:
+          PYTHONPATH: .
         run: pytest tests/test_agent.py -m "not integration"
