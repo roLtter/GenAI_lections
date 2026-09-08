@@ -3,5 +3,6 @@ requests
 python-decouple
 ddgs
 pytest
+pytest-cov
 pypdf
 pdfplumber
