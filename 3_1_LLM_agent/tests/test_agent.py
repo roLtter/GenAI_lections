@@ -4,8 +4,13 @@ from unittest.mock import Mock, patch
 from llm_agent.tool_currency_converter import CurrencyConverterTool
 
 
+@pytest.fixture(autouse=True)
+def clear_cache():
+    CurrencyConverterTool._cache.clear()
+
+
 # =====================================================================
-# ЮНИТ-ТЕСТЫ CurrencyConverterTool
+# ЮНИТ-ТЕСТЫ
 # =====================================================================
 
 def test_same_currency():
@@ -82,8 +87,6 @@ def test_cache():
         assert "85.00 EUR" in result1
         assert "170.00 EUR" in result2
 
-        # API вызван только один раз,
-        # второй запрос использует кеш
         mock_get.assert_called_once()
 
 
