@@ -18,7 +18,7 @@ class LLMAgent:
     """
 
     def __init__(self, model: str = "tngtech/deepseek-r1t2-chimera", local: bool = False, 
-                 ollama_base_url: str = "http://localhost:11434", ollama_model: str = "deepseek-r1:14b"):
+                 ollama_base_url: str = "http://localhost:11434", ollama_model: str = "qwen3.5:0.8b"):
         """
         Инициализирует агента.
         
