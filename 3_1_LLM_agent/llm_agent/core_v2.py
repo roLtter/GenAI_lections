@@ -15,7 +15,7 @@ from .tool_currency_converter import CurrencyConverterTool
 class LLMAgent:
     """
     LLM-агент, который планирует и выполняет задачи с помощью инструментов.
-    Поддерживает как OpenRouter API, так и локальный Ollama.
+    Поддерживает OpenRouter и локальный Ollama.
     """
 
     def __init__(
@@ -77,115 +77,108 @@ class LLMAgent:
             raise Exception(f"Ошибка при запросе к API: {e}")
 
     def _detect_currency_request(self, query: str) -> Optional[Dict]:
-    """
-    Определяет запрос на конвертацию валют без обращения к LLM.
-    """
+        """
+        Определяет запрос на конвертацию валют без обращения к LLM.
+        """
 
-    text = query.lower().strip()
+        text = query.lower().strip()
 
-    currency_aliases = {
-        "USD": [
-            "usd",
-            "доллар",
-            "доллара",
-            "долларов",
-            "доллары",
-            "долл",
-        ],
-        "EUR": [
-            "eur",
-            "евро",
-        ],
-        "RUB": [
-            "rub",
-            "руб",
-            "рубль",
-            "рубля",
-            "рублей",
-            "рубли",
-        ],
-        "GBP": [
-            "gbp",
-            "фунт",
-            "фунта",
-            "фунтов",
-            "фунты",
-        ],
-        "JPY": [
-            "jpy",
-            "иена",
-            "иены",
-            "иен",
-        ],
-        "CNY": [
-            "cny",
-            "юань",
-            "юаня",
-            "юаней",
-            "юани",
-        ],
-    }
+        currency_aliases = {
+            "USD": [
+                "usd",
+                "доллар",
+                "доллара",
+                "долларов",
+                "доллары",
+                "долл",
+            ],
+            "EUR": [
+                "eur",
+                "евро",
+            ],
+            "RUB": [
+                "rub",
+                "руб",
+                "рубль",
+                "рубля",
+                "рублей",
+                "рубли",
+                "рубл",
+            ],
+            "GBP": [
+                "gbp",
+                "фунт",
+                "фунта",
+                "фунтов",
+                "фунты",
+            ],
+            "JPY": [
+                "jpy",
+                "иена",
+                "иены",
+                "иен",
+            ],
+            "CNY": [
+                "cny",
+                "юань",
+                "юаня",
+                "юаней",
+                "юани",
+            ],
+        }
 
-    conversion_words = [
-        "конверт",
-        "переведи",
-        "перевести",
-        "перевод",
-        "обмен",
-        "сколько будет",
-        "сколько стоит",
-    ]
+        conversion_words = [
+            "конверт",
+            "переведи",
+            "перевести",
+            "перевод",
+            "обмен",
+            "сколько будет",
+            "сколько стоит",
+        ]
 
-    # Это вообще не запрос на конвертацию.
-    if not any(word in text for word in conversion_words):
-        return None
+        if not any(word in text for word in conversion_words):
+            return None
 
-    # Ищем сумму.
-    amount_match = re.search(
-        r"\b\d+(?:[.,]\d+)?\b",
-        text
-    )
+        amount_match = re.search(
+            r"\b\d+(?:[.,]\d+)?\b",
+            text
+        )
 
-    if not amount_match:
-        return None
+        if not amount_match:
+            return None
 
-    amount = amount_match.group(0).replace(",", ".")
+        amount = amount_match.group(0).replace(",", ".")
 
-    # Ищем валюты в порядке их появления в запросе.
-    found = []
+        found = []
 
-    for currency, aliases in currency_aliases.items():
-        for alias in aliases:
-            # Ищем слово, а не часть слова.
-            match = re.search(
-                rf"(?<![а-яёa-z]){re.escape(alias)}(?![а-яёa-z])",
-                text
-            )
+        for currency, aliases in currency_aliases.items():
+            for alias in aliases:
+                match = re.search(
+                    rf"(?<![а-яёa-z]){re.escape(alias)}(?![а-яёa-z])",
+                    text
+                )
 
-            if match:
-                found.append((match.start(), currency))
-                break
+                if match:
+                    found.append((match.start(), currency))
+                    break
 
-    found.sort()
+        found.sort()
 
-    # Для конвертации нужны две валюты.
-    if len(found) < 2:
-        return None
+        if len(found) < 2:
+            return None
 
-    from_currency = found[0][1]
-    to_currency = found[1][1]
+        from_currency = found[0][1]
+        to_currency = found[1][1]
 
-    action = {
-        "action": "currency_converter",
-        "input": f"{amount} {from_currency} {to_currency}"
-    }
-
-    return action
+        return {
+            "action": "currency_converter",
+            "input": f"{amount} {from_currency} {to_currency}"
+        }
 
     def _extract_plan_json(self, llm_text: str) -> List[Dict]:
         """
-        Пытается извлечь plan из ответа LLM даже если модель
-        добавила markdown, лишний текст или несколько JSON-блоков.
+        Извлекает plan из ответа LLM.
         """
 
         if not llm_text:
@@ -193,19 +186,24 @@ class LLMAgent:
 
         text = llm_text.strip()
 
-        # Убираем markdown fences.
-        text = re.sub(r"```json\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"```json\s*",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
         text = re.sub(r"```\s*", "", text)
 
-        # Сначала пробуем весь ответ.
         try:
             data = json.loads(text)
+
             if isinstance(data, dict):
                 return data.get("plan", [])
+
         except json.JSONDecodeError:
             pass
 
-        # Ищем объект, содержащий "plan".
         match = re.search(
             r'\{\s*"plan"\s*:\s*\[.*?\]\s*\}',
             text,
@@ -216,6 +214,7 @@ class LLMAgent:
             try:
                 data = json.loads(match.group(0))
                 return data.get("plan", [])
+
             except json.JSONDecodeError:
                 pass
 
@@ -224,21 +223,17 @@ class LLMAgent:
     def _ask_llm_for_plan(self, query: str) -> List[Dict]:
         """
         Создаёт план действий с помощью LLM.
-
-        Для валютных запросов сначала используется детерминированное
-        определение, чтобы маленькие локальные модели не ломали
-        выполнение currency_converter.
         """
 
-        # Надёжный путь для валютных запросов.
+        # Валютные запросы обрабатываем напрямую.
         currency_action = self._detect_currency_request(query)
 
         if currency_action:
             print(
-                "> Определён запрос на конвертацию валют "
-                "без участия LLM-планировщика."
+                "> Обнаружен запрос на конвертацию валют."
             )
-            print(f"> План: [{currency_action}]")
+            print(f"> План: {currency_action}")
+
             return [currency_action]
 
         system_prompt = """
@@ -268,11 +263,7 @@ Examples:
 5000 RUB USD
 50 EUR JPY
 
-IMPORTANT:
-- Return ONLY valid JSON.
-- Do not use Markdown.
-- Do not add explanations.
-- Do not add text before or after JSON.
+Return ONLY valid JSON.
 
 If tools are needed:
 {
@@ -335,15 +326,13 @@ If no tools are needed:
         prompt = f"""
 Ответь пользователю на его вопрос кратко и информативно.
 
-Вопрос пользователя:
+Вопрос:
 {user_query}
 
-Результаты работы инструментов:
+Результаты инструментов:
 {conversation_log}
 
 Используй результаты инструментов в ответе.
-Если результат содержит готовый результат конвертации валюты,
-обязательно укажи его пользователю.
 """
 
         payload = {
@@ -362,26 +351,19 @@ If no tools are needed:
 
             final_text = response_data["choices"][0]["message"]["content"]
 
-            # Защита от пустого ответа модели.
             if final_text and final_text.strip():
                 return final_text.strip()
 
-            # Если модель вернула пустоту, возвращаем результат инструмента.
             if self.conversation_history:
                 return self.conversation_history[-1]["content"]
 
             return "Не удалось получить ответ."
 
         except Exception as e:
-            # Даже при ошибке финальной генерации не теряем
-            # результат инструмента.
             if self.conversation_history:
                 return self.conversation_history[-1]["content"]
 
-            return (
-                f"Ошибка при генерации финального ответа. "
-                f"Детали: {e}"
-            )
+            return f"Ошибка при генерации ответа: {e}"
 
     def process_query(self, query: str) -> str:
         """
@@ -393,7 +375,6 @@ If no tools are needed:
             f"(Режим: {'локальный Ollama' if self.local else 'OpenRouter'})"
         )
 
-        # Очищаем историю предыдущего запроса.
         self.conversation_history = []
 
         # Шаг 1. Планирование.
@@ -436,7 +417,7 @@ If no tools are needed:
 
         print(f"План действий: {plan}")
 
-        # Шаг 2. Выполнение плана.
+        # Шаг 2. Выполнение инструментов.
         for step in plan:
             tool_name = step.get("action")
             tool_input = step.get("input", "")
@@ -466,8 +447,8 @@ If no tools are needed:
 
                     if len(parts) != 3:
                         raise ValueError(
-                            "Для currency_converter нужен формат: "
-                            "amount FROM_CURRENCY TO_CURRENCY"
+                            "Неверный формат currency_converter. "
+                            "Ожидается: amount FROM_CURRENCY TO_CURRENCY"
                         )
 
                     amount = float(parts[0])
@@ -483,7 +464,7 @@ If no tools are needed:
                 else:
                     result = self.tools[tool_name].use(tool_input)
 
-                print(f"Результат: {result}...")
+                print(f"Результат: {result}")
 
                 self.conversation_history.append({
                     "role": "system",
@@ -505,9 +486,8 @@ If no tools are needed:
                     "content": error_msg
                 })
 
-        # Шаг 3. Финальный ответ.
-                # Для конвертации валют результат инструмента уже является
-        # готовым ответом. Не делаем дополнительный запрос к LLM.
+        # Для currency_converter результат уже является готовым ответом.
+        # Не делаем второй дорогой запрос к Ollama.
         if any(
             step.get("action") == "currency_converter"
             for step in plan
@@ -515,15 +495,14 @@ If no tools are needed:
             if self.conversation_history:
                 result = self.conversation_history[-1]["content"]
 
-                # Убираем технический префикс "Tool currency_converter result: "
                 prefix = "Tool currency_converter result: "
+
                 if result.startswith(prefix):
                     result = result[len(prefix):]
 
                 return result
 
-        # Для остальных инструментов используем LLM
-        # для формирования финального ответа.
+        # Для остальных инструментов просим LLM сформировать ответ.
         print("Составляю финальный ответ...")
 
         return self._generate_final_response(query)
@@ -538,7 +517,11 @@ If no tools are needed:
 
         try:
             test_url = f"{self.ollama_base_url}/v1/models"
-            response = requests.get(test_url, timeout=10)
+            response = requests.get(
+                test_url,
+                timeout=10
+            )
+
             return response.status_code == 200
 
         except Exception:
