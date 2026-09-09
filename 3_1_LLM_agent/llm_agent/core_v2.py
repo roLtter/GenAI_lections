@@ -218,7 +218,18 @@ class LLMAgent:
 
             if tool_name in self.tools:
                 print(f"Выполняется инструмент: '{tool_name}'")
-                result = self.tools[tool_name].use(tool_input)
+            
+                if tool_name == "currency_converter":
+                    amount, from_currency, to_currency = tool_input.split()
+            
+                    result = self.tools[tool_name].use(
+                        float(amount),
+                        from_currency,
+                        to_currency
+                    )
+                else:
+                    result = self.tools[tool_name].use(tool_input)
+            
                 print(f"Результат: {result}...")
                 
                 # Добавляем результат в историю
