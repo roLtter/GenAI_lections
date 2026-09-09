@@ -100,7 +100,7 @@ def test_currency_conversion_live():
 
     agent = LLMAgent(
         local=True,
-        ollama_model="deepseek-r1:14b"
+        ollama_model="qwen3.5:0.8b"
     )
 
     query = "Сколько будет 100 долларов США в евро?"
@@ -116,7 +116,7 @@ def test_rub_to_usd_conversion_live():
 
     agent = LLMAgent(
         local=True,
-        ollama_model="deepseek-r1:14b"
+        ollama_model="qwen3.5:0.8b"
     )
 
     query = "Конвертируй 1000 рублей в доллары США."
