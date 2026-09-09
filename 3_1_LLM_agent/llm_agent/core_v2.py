@@ -77,143 +77,110 @@ class LLMAgent:
             raise Exception(f"Ошибка при запросе к API: {e}")
 
     def _detect_currency_request(self, query: str) -> Optional[Dict]:
-        """
-        Надёжно определяет простые запросы на конвертацию валют.
+    """
+    Определяет запрос на конвертацию валют без обращения к LLM.
+    """
 
-        Это fallback для маленьких локальных моделей, которые могут
-        неправильно выбрать инструмент или вернуть невалидный JSON.
-        """
+    text = query.lower().strip()
 
-        text = query.lower().strip()
+    currency_aliases = {
+        "USD": [
+            "usd",
+            "доллар",
+            "доллара",
+            "долларов",
+            "доллары",
+            "долл",
+        ],
+        "EUR": [
+            "eur",
+            "евро",
+        ],
+        "RUB": [
+            "rub",
+            "руб",
+            "рубль",
+            "рубля",
+            "рублей",
+            "рубли",
+        ],
+        "GBP": [
+            "gbp",
+            "фунт",
+            "фунта",
+            "фунтов",
+            "фунты",
+        ],
+        "JPY": [
+            "jpy",
+            "иена",
+            "иены",
+            "иен",
+        ],
+        "CNY": [
+            "cny",
+            "юань",
+            "юаня",
+            "юаней",
+            "юани",
+        ],
+    }
 
-        currency_patterns = {
-            "usd": [
-                r"\bдоллар(?:ов|а)?\b",
-                r"\bдолл(?:ар)?\.?\b",
-                r"\busd\b",
-                r"\$\b",
-            ],
-            "eur": [
-                r"\bевро\b",
-                r"\beur\b",
-                r"€",
-            ],
-            "rub": [
-                r"\bруб(?:ль|ля|лей)?\b",
-                r"\bрубл(?:ей|я|ь)?\b",
-                r"\brub\b",
-                r"\bроссийск(?:их|ий)\s+руб",
-            ],
-            "gbp": [
-                r"\bфунт(?:ов|а)?\b",
-                r"\bgbp\b",
-            ],
-            "jpy": [
-                r"\bиен(?:ы|а)?\b",
-                r"\bjpy\b",
-            ],
-            "cny": [
-                r"\bюан(?:ей|я)?\b",
-                r"\bcny\b",
-            ],
-        }
+    conversion_words = [
+        "конверт",
+        "переведи",
+        "перевести",
+        "перевод",
+        "обмен",
+        "сколько будет",
+        "сколько стоит",
+    ]
 
-        # Не считаем обычное упоминание валюты конвертацией.
-        conversion_words = (
-            "конверт",
-            "перевод",
-            "переведи",
-            "перевести",
-            "сколько будет",
-            "сколько стоит",
-            "обмен",
-            "в ",
-        )
-
-        if not any(word in text for word in conversion_words):
-            return None
-
-        detected_currencies = []
-
-        for currency, patterns in currency_patterns.items():
-            if any(re.search(pattern, text) for pattern in patterns):
-                detected_currencies.append(currency)
-
-        # Для конвертации нужны две разные валюты.
-        if len(detected_currencies) < 2:
-            return None
-
-        # Ищем число.
-        amount_match = re.search(
-            r"(?<!\w)(\d+(?:[.,]\d+)?)(?!\w)",
-            text
-        )
-
-        if not amount_match:
-            return None
-
-        amount = float(amount_match.group(1).replace(",", "."))
-
-        # Определяем направление по фразе "... из X в Y"
-        explicit_from_to = re.search(
-            r"(?:из|from)\s+([a-zа-яё]+).*?"
-            r"(?:в|во|to)\s+([a-zа-яё]+)",
-            text
-        )
-
-        if explicit_from_to:
-            from_text = explicit_from_to.group(1)
-            to_text = explicit_from_to.group(2)
-
-            def find_currency(value):
-                for currency, patterns in currency_patterns.items():
-                    if any(
-                        re.search(pattern, value)
-                        for pattern in patterns
-                    ):
-                        return currency
-                return None
-
-            from_currency = find_currency(from_text)
-            to_currency = find_currency(to_text)
-
-            if from_currency and to_currency:
-                return {
-                    "action": "currency_converter",
-                    "input": (
-                        f"{amount} "
-                        f"{from_currency.upper()} "
-                        f"{to_currency.upper()}"
-                    )
-                }
-
-        # Если направление явно не написано, определяем порядок
-        # по положению валют в исходном тексте.
-        positions = []
-
-        for currency, patterns in currency_patterns.items():
-            for pattern in patterns:
-                match = re.search(pattern, text)
-                if match:
-                    positions.append((match.start(), currency))
-                    break
-
-        positions.sort()
-
-        if len(positions) >= 2:
-            from_currency = positions[0][1]
-            to_currency = positions[1][1]
-
-            return {
-                "action": "currency_converter",
-                "input": (
-                    f"{amount} "
-                    f"{from_currency.upper()} "
-                    f"{to_currency.upper()}"
-                )
-            }
-
+    # Это вообще не запрос на конвертацию.
+    if not any(word in text for word in conversion_words):
         return None
+
+    # Ищем сумму.
+    amount_match = re.search(
+        r"\b\d+(?:[.,]\d+)?\b",
+        text
+    )
+
+    if not amount_match:
+        return None
+
+    amount = amount_match.group(0).replace(",", ".")
+
+    # Ищем валюты в порядке их появления в запросе.
+    found = []
+
+    for currency, aliases in currency_aliases.items():
+        for alias in aliases:
+            # Ищем слово, а не часть слова.
+            match = re.search(
+                rf"(?<![а-яёa-z]){re.escape(alias)}(?![а-яёa-z])",
+                text
+            )
+
+            if match:
+                found.append((match.start(), currency))
+                break
+
+    found.sort()
+
+    # Для конвертации нужны две валюты.
+    if len(found) < 2:
+        return None
+
+    from_currency = found[0][1]
+    to_currency = found[1][1]
+
+    action = {
+        "action": "currency_converter",
+        "input": f"{amount} {from_currency} {to_currency}"
+    }
+
+    return action
 
     def _extract_plan_json(self, llm_text: str) -> List[Dict]:
         """
