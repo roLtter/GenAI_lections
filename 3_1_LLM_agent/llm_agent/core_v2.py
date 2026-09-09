@@ -1,15 +1,16 @@
-# llm_agent/core.py
+# llm_agent/core_v2.py
 
-import requests
 import json
+import re
+import requests
 from typing import List, Dict, Optional
 from decouple import config
 
 from .tool_calculator import CalculatorTool
 from .tool_websearch import WebSearchTool
 from .tool_pdfinfo import PDFInfoTool
-
 from .tool_currency_converter import CurrencyConverterTool
+
 
 class LLMAgent:
     """
@@ -17,54 +18,43 @@ class LLMAgent:
     Поддерживает как OpenRouter API, так и локальный Ollama.
     """
 
-    def __init__(self, model: str = "tngtech/deepseek-r1t2-chimera", local: bool = False, 
-                 ollama_base_url: str = "http://localhost:11434", ollama_model: str = "qwen3.5:0.8b"):
-        """
-        Инициализирует агента.
-        
-        Args:
-            model (str): Название модели для OpenRouter.
-            local (bool): Если True, использует локальный Ollama вместо OpenRouter.
-            ollama_base_url (str): Базовый URL для Ollama API.
-            ollama_model (str): Название модели в Ollama.
-        """
+    def __init__(
+        self,
+        model: str = "tngtech/deepseek-r1t2-chimera",
+        local: bool = False,
+        ollama_base_url: str = "http://localhost:11434",
+        ollama_model: str = "qwen3.5:0.8b"
+    ):
         self.local = local
         self.ollama_base_url = ollama_base_url
         self.ollama_model = ollama_model
-        
+
         if not self.local:
-            self.api_key = config('OPENROUTER_API_KEY')
+            self.api_key = config("OPENROUTER_API_KEY")
             self.url = "https://openrouter.ai/api/v1/chat/completions"
             self.model = model
         else:
             self.api_key = None
             self.url = f"{self.ollama_base_url}/v1/chat/completions"
             self.model = ollama_model
-        
-        # Создаем экземпляры инструментов
+
         self.tools = {
             "calculator": CalculatorTool(),
             "web_search": WebSearchTool(),
             "pdf_info": PDFInfoTool(),
             "currency_converter": CurrencyConverterTool(),
         }
+
         self.conversation_history = []
-    
-    def _make_api_request(self, payload: Dict, headers: Optional[Dict] = None) -> Dict:
-        """
-        Универсальный метод для отправки запросов к API.
-        Поддерживает как OpenRouter, так и Ollama.
-        
-        Args:
-            payload (Dict): Тело запроса.
-            headers (Dict, optional): Заголовки запроса.
-            
-        Returns:
-            Dict: Ответ от API.
-        """
+
+    def _make_api_request(
+        self,
+        payload: Dict,
+        headers: Optional[Dict] = None
+    ) -> Dict:
         if headers is None:
             headers = {}
-        
+
         if not self.local:
             headers.update({
                 "Authorization": f"Bearer {self.api_key}",
@@ -72,195 +62,499 @@ class LLMAgent:
             })
         else:
             headers["Content-Type"] = "application/json"
-        
+
         try:
-            response = requests.post(self.url, json=payload, headers=headers)
+            response = requests.post(
+                self.url,
+                json=payload,
+                headers=headers,
+                timeout=120
+            )
             response.raise_for_status()
             return response.json()
+
         except requests.exceptions.RequestException as e:
             raise Exception(f"Ошибка при запросе к API: {e}")
-    
-    def _ask_llm_for_plan(self, query: str) -> List[Dict]:
+
+    def _detect_currency_request(self, query: str) -> Optional[Dict]:
         """
-        Создает план действий, используя LLM.
-        Работает как с OpenRouter, так и с Ollama.
-        """
-        # Системный промпт, который объясняет агенту его роль и формат ответа
-        system_prompt = f"""
-        You are a helpful AI planning assistant. Analyze the user's request and decide if you need to use any tools.
-        Available tools:
-        - **calculator**: For any math-related questions (numbers, calculations). Use it with the full expression.
-        - **web_search**: For finding any information about the real world (current events, facts, definitions). Use it with the user's question or a clear search query. USE ONLY RUSSIAN LANGUAGE QUERIES in this tool.
-        - **pdf_info**: For extracting information from PDF files (metadata, page count, text content). Use it with a local file path or a URL to a PDF file.
-        - **currency_converter**: For converting one currency to another using current exchange rates.
-          Use it ONLY for currency conversion requests.
-          The input MUST have the format: "amount FROM_CURRENCY TO_CURRENCY".
-          Example: "100 USD EUR", "5000 RUB USD", "50 EUR JPY".
-        If one or more tools are needed to answer, return JSON of this structure:
-        {{
-        "plan": [
-            {{"action": "tool_name", "input": "some text to pass into tool"}},
-            ... //MORE ACTIONS IF NEEDED SEVERAL TOOLS. ONE ACTION FOR ONE TOOL CALL
-        ]
-        }}
-        If no tool is needed, return an empty plan: {{"plan": []}}.
+        Надёжно определяет простые запросы на конвертацию валют.
+
+        Это fallback для маленьких локальных моделей, которые могут
+        неправильно выбрать инструмент или вернуть невалидный JSON.
         """
 
-        # Формируем запрос к API
+        text = query.lower().strip()
+
+        currency_patterns = {
+            "usd": [
+                r"\bдоллар(?:ов|а)?\b",
+                r"\bдолл(?:ар)?\.?\b",
+                r"\busd\b",
+                r"\$\b",
+            ],
+            "eur": [
+                r"\bевро\b",
+                r"\beur\b",
+                r"€",
+            ],
+            "rub": [
+                r"\bруб(?:ль|ля|лей)?\b",
+                r"\bрубл(?:ей|я|ь)?\b",
+                r"\brub\b",
+                r"\bроссийск(?:их|ий)\s+руб",
+            ],
+            "gbp": [
+                r"\bфунт(?:ов|а)?\b",
+                r"\bgbp\b",
+            ],
+            "jpy": [
+                r"\bиен(?:ы|а)?\b",
+                r"\bjpy\b",
+            ],
+            "cny": [
+                r"\bюан(?:ей|я)?\b",
+                r"\bcny\b",
+            ],
+        }
+
+        # Не считаем обычное упоминание валюты конвертацией.
+        conversion_words = (
+            "конверт",
+            "перевод",
+            "переведи",
+            "перевести",
+            "сколько будет",
+            "сколько стоит",
+            "обмен",
+            "в ",
+        )
+
+        if not any(word in text for word in conversion_words):
+            return None
+
+        detected_currencies = []
+
+        for currency, patterns in currency_patterns.items():
+            if any(re.search(pattern, text) for pattern in patterns):
+                detected_currencies.append(currency)
+
+        # Для конвертации нужны две разные валюты.
+        if len(detected_currencies) < 2:
+            return None
+
+        # Ищем число.
+        amount_match = re.search(
+            r"(?<!\w)(\d+(?:[.,]\d+)?)(?!\w)",
+            text
+        )
+
+        if not amount_match:
+            return None
+
+        amount = float(amount_match.group(1).replace(",", "."))
+
+        # Определяем направление по фразе "... из X в Y"
+        explicit_from_to = re.search(
+            r"(?:из|from)\s+([a-zа-яё]+).*?"
+            r"(?:в|во|to)\s+([a-zа-яё]+)",
+            text
+        )
+
+        if explicit_from_to:
+            from_text = explicit_from_to.group(1)
+            to_text = explicit_from_to.group(2)
+
+            def find_currency(value):
+                for currency, patterns in currency_patterns.items():
+                    if any(
+                        re.search(pattern, value)
+                        for pattern in patterns
+                    ):
+                        return currency
+                return None
+
+            from_currency = find_currency(from_text)
+            to_currency = find_currency(to_text)
+
+            if from_currency and to_currency:
+                return {
+                    "action": "currency_converter",
+                    "input": (
+                        f"{amount} "
+                        f"{from_currency.upper()} "
+                        f"{to_currency.upper()}"
+                    )
+                }
+
+        # Если направление явно не написано, определяем порядок
+        # по положению валют в исходном тексте.
+        positions = []
+
+        for currency, patterns in currency_patterns.items():
+            for pattern in patterns:
+                match = re.search(pattern, text)
+                if match:
+                    positions.append((match.start(), currency))
+                    break
+
+        positions.sort()
+
+        if len(positions) >= 2:
+            from_currency = positions[0][1]
+            to_currency = positions[1][1]
+
+            return {
+                "action": "currency_converter",
+                "input": (
+                    f"{amount} "
+                    f"{from_currency.upper()} "
+                    f"{to_currency.upper()}"
+                )
+            }
+
+        return None
+
+    def _extract_plan_json(self, llm_text: str) -> List[Dict]:
+        """
+        Пытается извлечь plan из ответа LLM даже если модель
+        добавила markdown, лишний текст или несколько JSON-блоков.
+        """
+
+        if not llm_text:
+            return []
+
+        text = llm_text.strip()
+
+        # Убираем markdown fences.
+        text = re.sub(r"```json\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"```\s*", "", text)
+
+        # Сначала пробуем весь ответ.
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data.get("plan", [])
+        except json.JSONDecodeError:
+            pass
+
+        # Ищем объект, содержащий "plan".
+        match = re.search(
+            r'\{\s*"plan"\s*:\s*\[.*?\]\s*\}',
+            text,
+            flags=re.DOTALL
+        )
+
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                return data.get("plan", [])
+            except json.JSONDecodeError:
+                pass
+
+        return []
+
+    def _ask_llm_for_plan(self, query: str) -> List[Dict]:
+        """
+        Создаёт план действий с помощью LLM.
+
+        Для валютных запросов сначала используется детерминированное
+        определение, чтобы маленькие локальные модели не ломали
+        выполнение currency_converter.
+        """
+
+        # Надёжный путь для валютных запросов.
+        currency_action = self._detect_currency_request(query)
+
+        if currency_action:
+            print(
+                "> Определён запрос на конвертацию валют "
+                "без участия LLM-планировщика."
+            )
+            print(f"> План: [{currency_action}]")
+            return [currency_action]
+
+        system_prompt = """
+You are an AI planning assistant.
+
+Available tools:
+
+1. calculator
+Use for mathematical calculations.
+Input: mathematical expression.
+
+2. web_search
+Use for current information or real-world facts.
+Input: search query in Russian.
+
+3. pdf_info
+Use for extracting information from PDF files.
+Input: file path or PDF URL.
+
+4. currency_converter
+Use ONLY for currency conversion.
+Input MUST be exactly:
+amount FROM_CURRENCY TO_CURRENCY
+
+Examples:
+100 USD EUR
+5000 RUB USD
+50 EUR JPY
+
+IMPORTANT:
+- Return ONLY valid JSON.
+- Do not use Markdown.
+- Do not add explanations.
+- Do not add text before or after JSON.
+
+If tools are needed:
+{
+  "plan": [
+    {
+      "action": "tool_name",
+      "input": "tool input"
+    }
+  ]
+}
+
+If no tools are needed:
+{
+  "plan": []
+}
+"""
+
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query}
-            ]
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": query
+                }
+            ],
+            "stream": False
         }
-        
+
         try:
-            # Для Ollama может потребоваться дополнительная настройка
-            if self.local:
-                # Некоторые модели Ollama могут требовать параметр stream=False
-                payload["stream"] = False
-            
             response_data = self._make_api_request(payload)
-            
-            # Извлекаем текстовый ответ от модели
+
             llm_text = response_data["choices"][0]["message"]["content"]
 
-            # Очищаем ответ от блоков кода Markdown
-            import re
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', llm_text, re.DOTALL)
-            
-            if json_match:
-                cleaned_json_text = json_match.group(1)
-            else:
-                cleaned_json_text = llm_text
+            print(
+                f"> Ответ LLM для плана (очищенный): {llm_text}"
+            )
 
-            print(f"> Ответ LLM для плана (очищенный): {cleaned_json_text}")
-            
-            # Пытаемся преобразовать ответ в JSON
-            action_plan = json.loads(cleaned_json_text)
-            plan = action_plan.get("plan", [])
-            return plan
-            
-        except (json.JSONDecodeError, KeyError, Exception) as e:
-            print(f"Произошла ошибка при создании плана: {e}")
-            # Пробуем альтернативный подход: извлечь JSON из текста
-            try:
-                # Ищем JSON в тексте без маркеров
-                import re
-                json_match = re.search(r'\{.*"plan".*\}', llm_text, re.DOTALL)
-                if json_match:
-                    action_plan = json.loads(json_match.group())
-                    return action_plan.get("plan", [])
-            except:
-                pass
+            return self._extract_plan_json(llm_text)
+
+        except Exception as e:
+            print(
+                f"Произошла ошибка при создании плана: {e}"
+            )
             return []
 
     def _generate_final_response(self, user_query: str) -> str:
         """
-        Генерирует финальный ответ на основе истории выполнения.
+        Генерирует финальный ответ на основе результатов инструментов.
         """
+
+        conversation_log = "\n".join(
+            msg["content"]
+            for msg in self.conversation_history
+        )
+
         prompt = f"""
-        Based on the following conversation log, provide a direct and helpful answer to the user's original question.
-        Be concise and use the information from the tool results to support your answer.
+Ответь пользователю на его вопрос кратко и информативно.
 
-        Original User Question: {user_query}
+Вопрос пользователя:
+{user_query}
 
-        Conversation Log:
-        {chr(10).join([msg['content'] for msg in self.conversation_history])}
-        """
-        
+Результаты работы инструментов:
+{conversation_log}
+
+Используй результаты инструментов в ответе.
+Если результат содержит готовый результат конвертации валюты,
+обязательно укажи его пользователю.
+"""
+
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}]
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "stream": False
         }
-        
-        if self.local:
-            payload["stream"] = False
-        
+
         try:
             response_data = self._make_api_request(payload)
+
             final_text = response_data["choices"][0]["message"]["content"]
-            return final_text
+
+            # Защита от пустого ответа модели.
+            if final_text and final_text.strip():
+                return final_text.strip()
+
+            # Если модель вернула пустоту, возвращаем результат инструмента.
+            if self.conversation_history:
+                return self.conversation_history[-1]["content"]
+
+            return "Не удалось получить ответ."
+
         except Exception as e:
-            return f"Ошибка при генерации финального ответа. Детали: {e}"
+            # Даже при ошибке финальной генерации не теряем
+            # результат инструмента.
+            if self.conversation_history:
+                return self.conversation_history[-1]["content"]
+
+            return (
+                f"Ошибка при генерации финального ответа. "
+                f"Детали: {e}"
+            )
 
     def process_query(self, query: str) -> str:
         """
-        Основной метод для обработки запроса пользователя.
+        Основной метод обработки запроса пользователя.
         """
-        print(f"Агент анализирует ваш запрос... (Режим: {'локальный Ollama' if self.local else 'OpenRouter'})")
-        
-        # --- Шаг 1: Планирование ---
+
+        print(
+            "Агент анализирует ваш запрос... "
+            f"(Режим: {'локальный Ollama' if self.local else 'OpenRouter'})"
+        )
+
+        # Очищаем историю предыдущего запроса.
+        self.conversation_history = []
+
+        # Шаг 1. Планирование.
         plan = self._ask_llm_for_plan(query)
 
         if not plan:
-            print("Инструменты не требуются. Генерирую ответ напрямую.")
-            # Генерируем прямой ответ через LLM
-            direct_prompt = f"Ответьте на следующий вопрос кратко и информативно: {query}"
+            print(
+                "Инструменты не требуются. "
+                "Генерирую ответ напрямую."
+            )
+
+            direct_prompt = (
+                "Ответьте на следующий вопрос кратко и информативно:\n"
+                f"{query}"
+            )
+
             payload = {
                 "model": self.model,
-                "messages": [{"role": "user", "content": direct_prompt}]
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": direct_prompt
+                    }
+                ],
+                "stream": False
             }
-            if self.local:
-                payload["stream"] = False
+
             try:
                 response_data = self._make_api_request(payload)
-                return response_data["choices"][0]["message"]["content"]
-            except:
-                return "Извините, не удалось сгенерировать ответ."
 
-        # --- Шаг 2: Исполнение плана ---
+                response = response_data["choices"][0]["message"]["content"]
+
+                if response and response.strip():
+                    return response.strip()
+
+                return "Не удалось получить ответ."
+
+            except Exception as e:
+                return f"Ошибка: {e}"
+
         print(f"План действий: {plan}")
-        for step in plan:
-            tool_name = step.get('action')
-            tool_input = step.get('input')
 
-            if tool_name in self.tools:
-                print(f"Выполняется инструмент: '{tool_name}'")
-            
+        # Шаг 2. Выполнение плана.
+        for step in plan:
+            tool_name = step.get("action")
+            tool_input = step.get("input", "")
+
+            if tool_name not in self.tools:
+                error_msg = (
+                    f"Ошибка: инструмент с именем "
+                    f"'{tool_name}' не найден."
+                )
+
+                print(error_msg)
+
+                self.conversation_history.append({
+                    "role": "system",
+                    "content": error_msg
+                })
+
+                continue
+
+            print(
+                f"Выполняется инструмент: '{tool_name}'"
+            )
+
+            try:
                 if tool_name == "currency_converter":
-                    amount, from_currency, to_currency = tool_input.split()
-            
+                    parts = tool_input.split()
+
+                    if len(parts) != 3:
+                        raise ValueError(
+                            "Для currency_converter нужен формат: "
+                            "amount FROM_CURRENCY TO_CURRENCY"
+                        )
+
+                    amount = float(parts[0])
+                    from_currency = parts[1]
+                    to_currency = parts[2]
+
                     result = self.tools[tool_name].use(
-                        float(amount),
+                        amount,
                         from_currency,
                         to_currency
                     )
+
                 else:
                     result = self.tools[tool_name].use(tool_input)
-            
+
                 print(f"Результат: {result}...")
-                
-                # Добавляем результат в историю
+
                 self.conversation_history.append({
-                    'role': 'system',
-                    'content': f"Tool {tool_name} result: {result}"
+                    "role": "system",
+                    "content": (
+                        f"Tool {tool_name} result: {result}"
+                    )
                 })
-            else:
-                error_msg = f"Ошибка: инструмент с именем '{tool_name}' не найден."
+
+            except Exception as e:
+                error_msg = (
+                    f"Ошибка при выполнении инструмента "
+                    f"'{tool_name}': {e}"
+                )
+
                 print(error_msg)
-                self.conversation_history.append({'role': 'system', 'content': error_msg})
-        
-        # --- Шаг 3: Генерация финального ответа ---
+
+                self.conversation_history.append({
+                    "role": "system",
+                    "content": error_msg
+                })
+
+        # Шаг 3. Финальный ответ.
         print("Составляю финальный ответ...")
-        final_response = self._generate_final_response(query)
-        return final_response
+
+        return self._generate_final_response(query)
 
     def test_ollama_connection(self) -> bool:
         """
-        Тестирует соединение с локальным Ollama сервером.
-        
-        Returns:
-            bool: True если соединение успешно, иначе False.
+        Проверяет соединение с локальным Ollama.
         """
+
         if not self.local:
             return False
-        
+
         try:
-            # Проверяем доступность Ollama API
             test_url = f"{self.ollama_base_url}/v1/models"
-            response = requests.get(test_url)
+            response = requests.get(test_url, timeout=10)
             return response.status_code == 200
-        except:
+
+        except Exception:
             return False
