@@ -539,6 +539,24 @@ If no tools are needed:
                 })
 
         # Шаг 3. Финальный ответ.
+                # Для конвертации валют результат инструмента уже является
+        # готовым ответом. Не делаем дополнительный запрос к LLM.
+        if any(
+            step.get("action") == "currency_converter"
+            for step in plan
+        ):
+            if self.conversation_history:
+                result = self.conversation_history[-1]["content"]
+
+                # Убираем технический префикс "Tool currency_converter result: "
+                prefix = "Tool currency_converter result: "
+                if result.startswith(prefix):
+                    result = result[len(prefix):]
+
+                return result
+
+        # Для остальных инструментов используем LLM
+        # для формирования финального ответа.
         print("Составляю финальный ответ...")
 
         return self._generate_final_response(query)
