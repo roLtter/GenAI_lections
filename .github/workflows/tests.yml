@@ -1,4 +1,6 @@
-name: Python Tests
+# This workflow will install Python dependencies and run tests
+
+name: Python application
 
 on:
   push:
@@ -6,44 +8,72 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  build:
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
 
-      - name: Install dependencies
-        working-directory: 3_1_LLM_agent
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Install dependencies
+      working-directory: ./3_1_LLM_agent
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run tests with coverage
-        working-directory: 3_1_LLM_agent
-        env:
-          PYTHONPATH: .
-        run: pytest tests/test_agent.py -m "not integration" --cov=llm_agent.tool_currency_converter --cov-report=term --cov-report=xml
+    # - name: Lint with flake8
+    #   working-directory: ./3_1_LLM_agent
+    #   run: |
+    #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    #     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-      - name: Generate coverage badge
-        working-directory: 3_1_LLM_agent
-        run: python coverage_badge.py
+    - name: Download and extract Ollama manually
+      run: |
+        if [ "${{ runner.arch }}" = "X64" ]; then
+          ARCH="amd64"
+        else
+          ARCH="arm64"
+        fi
 
-      - name: Update coverage Gist
-        working-directory: 3_1_LLM_agent
-        env:
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          GIST_ID: f80f71e47d22f37aebd88b201398889b
-        run: |
-          curl \
-            --request PATCH \
-            --header "Authorization: Bearer $GIST_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            --data "{\"files\":{\"GenAI_lections_main.json\":{\"content\":$(jq -Rs . < coverage_badge.json)}}}" \
-            "https://api.github.com/gists/$GIST_ID"
+        curl -fsSL "https://ollama.com/download/ollama-linux-${ARCH}.tar.zst" -o ollama.tar.zst
+
+        mkdir -p .ollama-install
+        tar -C .ollama-install --zstd -xf ollama.tar.zst
+
+        rm ollama.tar.zst
+
+        echo "$(pwd)/.ollama-install/bin" >> $GITHUB_PATH
+
+    - name: Start Ollama Service and Pull Model
+      run: |
+        export OLLAMA_NUM_PARALLEL=1
+        export OLLAMA_MAX_LOADED_MODELS=1
+
+        ollama serve > ollama.log 2>&1 &
+
+        sleep 5
+
+        # МОДЕЛЬ ДЛЯ CI
+        ollama pull qwen3.5:0.8b
+
+    - name: Test with pytest
+      working-directory: ./3_1_LLM_agent
+      env:
+        PYTHONPATH: .
+      run: |
+        python -m pytest -v
+
+    - name: Show Ollama logs if tests fail
+      if: failure()
+      run: |
+        cat ollama.log
